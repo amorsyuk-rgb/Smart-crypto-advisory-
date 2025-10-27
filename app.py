@@ -1,8 +1,5 @@
-from flask import Flask, render_template, request, jsonify, session
+from flask import Flask, render_template, request, jsonify
 import requests
-import json
-import pandas as pd
-from datetime import datetime, timedelta
 import os
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -25,17 +22,23 @@ class CryptoAdvisor:
         # OpenAI setup
         openai_api_key = os.getenv('OPENAI_API_KEY')
         if openai_api_key:
-            self.ai_services['openai'] = OpenAI(api_key=openai_api_key)
-            print("✅ OpenAI service configured")
+            try:
+                self.ai_services['openai'] = OpenAI(api_key=openai_api_key)
+                print("✅ OpenAI service configured")
+            except Exception as e:
+                print(f"❌ OpenAI setup failed: {e}")
         
         # DeepSeek setup
         deepseek_api_key = os.getenv('DEEPSEEK_API_KEY')
         if deepseek_api_key:
-            self.ai_services['deepseek'] = OpenAI(
-                api_key=deepseek_api_key,
-                base_url="https://api.deepseek.com/v1"
-            )
-            print("✅ DeepSeek service configured")
+            try:
+                self.ai_services['deepseek'] = OpenAI(
+                    api_key=deepseek_api_key,
+                    base_url="https://api.deepseek.com/v1"
+                )
+                print("✅ DeepSeek service configured")
+            except Exception as e:
+                print(f"❌ DeepSeek setup failed: {e}")
         
         if self.ai_services:
             self.ai_enabled = True
@@ -56,9 +59,6 @@ class CryptoAdvisor:
                 'price_change_24h': data.get('market_data', {}).get('price_change_percentage_24h', 0),
                 'volume_24h': data.get('market_data', {}).get('total_volume', {}).get('usd', 0),
                 'circulating_supply': data.get('market_data', {}).get('circulating_supply', 0),
-                'total_supply': data.get('market_data', {}).get('total_supply', 0),
-                'ath': data.get('market_data', {}).get('ath', {}).get('usd', 0),
-                'ath_change_percentage': data.get('market_data', {}).get('ath_change_percentage', {}).get('usd', 0),
                 'image': data.get('image', {}).get('large', '')
             }
         except Exception as e:
@@ -82,6 +82,21 @@ class CryptoAdvisor:
             print(f"Error fetching top cryptos: {e}")
             return []
 
+    def analyze_market_sentiment(self, coin_data):
+        """Analyze market sentiment"""
+        price_change = coin_data.get('price_change_24h', 0)
+        
+        if price_change > 10:
+            return "STRONG BULLISH", "success"
+        elif price_change > 5:
+            return "BULLISH", "info"
+        elif price_change < -10:
+            return "STRONG BEARISH", "danger"
+        elif price_change < -5:
+            return "BEARISH", "warning"
+        else:
+            return "NEUTRAL", "secondary"
+
 # Initialize the advisor
 advisor = CryptoAdvisor()
 
@@ -89,13 +104,33 @@ advisor = CryptoAdvisor()
 def index():
     """Home page with market overview"""
     top_cryptos = advisor.get_top_cryptos(10)
+    
+    # Add sentiment analysis to each crypto
+    for crypto in top_cryptos:
+        coin_data = {
+            'price_change_24h': crypto.get('price_change_percentage_24h', 0)
+        }
+        sentiment, sentiment_color = advisor.analyze_market_sentiment(coin_data)
+        crypto['sentiment'] = sentiment
+        crypto['sentiment_color'] = sentiment_color
+    
     return render_template('index.html', cryptos=top_cryptos, ai_enabled=advisor.ai_enabled)
 
 @app.route('/analyze/<coin_id>')
 def analyze_crypto(coin_id):
     """Analyze specific cryptocurrency"""
     coin_data = advisor.get_crypto_data(coin_id)
-    return render_template('analysis.html', coin_data=coin_data, ai_enabled=advisor.ai_enabled)
+    
+    if not coin_data:
+        return "Cryptocurrency not found", 404
+    
+    sentiment, sentiment_color = advisor.analyze_market_sentiment(coin_data)
+    
+    return render_template('analysis.html', 
+                         coin_data=coin_data,
+                         sentiment=sentiment,
+                         sentiment_color=sentiment_color,
+                         ai_enabled=advisor.ai_enabled)
 
 @app.route('/education')
 def education():
@@ -107,5 +142,13 @@ def portfolio():
     """Portfolio management page"""
     return render_template('portfolio.html')
 
+@app.errorhandler(404)
+def not_found(e):
+    return render_template('error.html', message="Page not found"), 404
+
+@app.errorhandler(500)
+def server_error(e):
+    return render_template('error.html', message="Server error"), 500
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False)
