@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: crypto-advisory-app
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: OPENAI_API_KEY
+        value: your_openai_api_key_here
+      - key: DEEPSEEK_API_KEY
+        value: your_deepseek_api_key_here
