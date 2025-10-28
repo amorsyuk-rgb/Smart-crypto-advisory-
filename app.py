@@ -1,48 +1,65 @@
 from flask import Flask, render_template, request, jsonify
 import requests
 import os
-from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv('SECRET_KEY', 'dev-secret-key')
+app.secret_key = os.getenv('SECRET_KEY', 'dev-secret-key-12345')
 
 class CryptoAdvisor:
     def __init__(self):
         self.api_base = "https://api.coingecko.com/api/v3"
+        self.ai_enabled = False
         self.setup_ai_services()
     
     def setup_ai_services(self):
-        """Setup AI services with API keys"""
-        self.ai_enabled = False
-        self.ai_services = {}
+        """Setup AI services with API keys - with error handling"""
+        try:
+            # Try to import OpenAI
+            from openai import OpenAI
+            
+            # OpenAI setup
+            openai_api_key = os.getenv('OPENAI_API_KEY')
+            if openai_api_key:
+                self.ai_services = {'openai': OpenAI(api_key=openai_api_key)}
+                self.ai_enabled = True
+                print("✅ AI services configured")
+            else:
+                print("ℹ️  OpenAI API key not found - AI features disabled")
+                self.ai_enabled = False
+                
+        except ImportError:
+            print("⚠️  OpenAI module not available - AI features disabled")
+            self.ai_enabled = False
+        except Exception as e:
+            print(f"⚠️  AI setup failed: {e} - AI features disabled")
+            self.ai_enabled = False
+
+    def get_ai_analysis(self, coin_data):
+        """Get AI analysis with error handling"""
+        if not self.ai_enabled:
+            return "AI analysis is currently unavailable. Please check if OpenAI package is installed and API keys are configured."
         
-        # OpenAI setup
-        openai_api_key = os.getenv('OPENAI_API_KEY')
-        if openai_api_key:
-            try:
-                self.ai_services['openai'] = OpenAI(api_key=openai_api_key)
-                print("✅ OpenAI service configured")
-            except Exception as e:
-                print(f"❌ OpenAI setup failed: {e}")
-        
-        # DeepSeek setup
-        deepseek_api_key = os.getenv('DEEPSEEK_API_KEY')
-        if deepseek_api_key:
-            try:
-                self.ai_services['deepseek'] = OpenAI(
-                    api_key=deepseek_api_key,
-                    base_url="https://api.deepseek.com/v1"
-                )
-                print("✅ DeepSeek service configured")
-            except Exception as e:
-                print(f"❌ DeepSeek setup failed: {e}")
-        
-        if self.ai_services:
-            self.ai_enabled = True
-            print("🤖 AI analysis features are ENABLED")
+        try:
+            prompt = f"""
+            Analyze {coin_data.get('name')} ({coin_data.get('symbol')}) for investment purposes:
+            - Current Price: ${coin_data.get('current_price', 0):,.2f}
+            - 24h Change: {coin_data.get('price_change_24h', 0):.2f}%
+            - Market Cap: ${coin_data.get('market_cap', 0)/1e9:.2f}B
+            
+            Provide brief investment analysis.
+            """
+            
+            response = self.ai_services['openai'].chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=200
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            return f"AI analysis temporarily unavailable: {str(e)}"
 
     def get_crypto_data(self, coin_id='bitcoin'):
         """Fetch current cryptocurrency data"""
@@ -65,7 +82,7 @@ class CryptoAdvisor:
             print(f"Error fetching data: {e}")
             return {}
 
-    def get_top_cryptos(self, limit=20):
+    def get_top_cryptos(self, limit=10):
         """Get top cryptocurrencies by market cap"""
         try:
             url = f"{self.api_base}/coins/markets"
@@ -122,14 +139,20 @@ def analyze_crypto(coin_id):
     coin_data = advisor.get_crypto_data(coin_id)
     
     if not coin_data:
-        return "Cryptocurrency not found", 404
+        return render_template('error.html', message="Cryptocurrency not found"), 404
     
     sentiment, sentiment_color = advisor.analyze_market_sentiment(coin_data)
+    
+    # Get AI analysis if available
+    ai_analysis = None
+    if advisor.ai_enabled:
+        ai_analysis = advisor.get_ai_analysis(coin_data)
     
     return render_template('analysis.html', 
                          coin_data=coin_data,
                          sentiment=sentiment,
                          sentiment_color=sentiment_color,
+                         ai_analysis=ai_analysis,
                          ai_enabled=advisor.ai_enabled)
 
 @app.route('/education')
@@ -141,6 +164,12 @@ def education():
 def portfolio():
     """Portfolio management page"""
     return render_template('portfolio.html')
+
+@app.route('/api/market-data')
+def api_market_data():
+    """API endpoint for market data"""
+    cryptos = advisor.get_top_cryptos(20)
+    return jsonify(cryptos)
 
 @app.errorhandler(404)
 def not_found(e):
